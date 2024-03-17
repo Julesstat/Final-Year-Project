@@ -1,0 +1,295 @@
+#########Pigs data######
+library(readxl) #To read excel files
+library(caret)   # For model training and evaluation
+library(ROCR) #For ROC area under curves and plotting the curves
+library(pROC) #For AUC values
+
+
+results <- read_excel("~/FinalYearProject/rrt_pcr_results_submitted.xlsx")
+dim(results)
+pigs = results[,-1:-2] #getting rid of row stating the id number and the date of collection
+pigs = pigs[,-4:-5] #getting rid of rvb and rvc as only looking as rva
+dim(pigs)
+
+count_of_ones <- sum(pigs$rva == 1)
+
+# Print the result
+print(count_of_ones)
+
+# Define a mapping between state names and regions
+region_mapping <- list(
+  Midwest = c("IL", "IN", "IA", "KS", "MI", "MN", "MO", "NE", "OH", "SD", "WI"),
+  South_central = c("OK", "TX"),
+  Southeast = c("NC", "SC"),
+  Other_US_states = c("ND", "PA", "CO", "AZ", "AL", "AR", "FL", "KY", "TN", "UT", "VA", "VT", "WY"),
+  Non_US_regions = c("MX", "CA")
+)
+
+# Define a mapping between regions and numbers
+region_number_mapping <- setNames(1:length(region_mapping), names(region_mapping))
+
+# Function to map states to region numbers
+map_to_region_number <- function(state) {
+  for(region_name in names(region_mapping)) {
+    if(state %in% region_mapping[[region_name]]) {
+      return(region_number_mapping[[region_name]])
+    }
+  }
+  return(0)  # Return 0 for states not found in the mapping
+}
+
+# Apply the function to create the region number column
+pigs$region <- sapply(pigs$state, map_to_region_number)
+
+# Remove the state column
+pigs <- pigs[ , !names(pigs) %in% "state"]
+
+# Print the updated dataframe
+print(pigs)
+
+
+#ages
+categorize_age <- function(age) {
+  if (age >= 0 & age <= 3) {
+    return(1)  # 1–3 day old pigs
+  } else if (age >= 4 & age <= 20) {
+    return(2)  # 4–20 days old
+  } else if (age >= 21 & age <= 55) {
+    return(3)  # 21–55 days old
+  } else if (age > 55) {
+    return(4)  # >55 day old age groups
+  } else {
+    return(NA)  # Other ages
+  }
+}
+pigs$age <- sapply(pigs$age, categorize_age)
+print(pigs)
+dim(pigs)
+
+set.seed(7)
+validationIndex <- caret::createDataPartition(pigs$rva, p=0.70, list=FALSE)
+test <- pigs[-validationIndex,] #test, validation
+train <- pigs[validationIndex,] #train, dataset
+dim(test)
+dim(train)
+
+
+
+#trainControl = trainControl(method = "LOOCV")
+trainControl = trainControl(method="cv", number=5, verboseIter = TRUE)
+#nb_grid = expand.grid(laplace = 0, usekernel = T, adjust = 1)
+rf_grid = expand.grid(mtry = 2) 
+pls_grid = expand.grid(method = "oscorespls")
+
+train$rva <- factor(train$rva)
+
+#Random Forest model
+rfmodel = train(rva ~ ., data = train, method = 'rf', preProcess = c('center', 'scale'), trControl = trainControl, tuneGrid = rf_grid, importance = TRUE)
+rf_predictions <- predict(rfmodel, test)
+
+#partial least squares regression (PLS) model
+plsmodel <- train(rva ~ ., data = train, method = 'pls', preProcess = c('center', 'scale'), trControl = trainControl(method = "cv", number = 3))
+pls_predictions <- predict(plsmodel, test)
+
+#Gradient Boosting Machine (GBM) model
+gbmmodel <- train(rva ~ ., data = train, method = "gbm", trControl = trainControl,  verbose = TRUE)
+gbm_predictions <- predict(gbmmodel, test)
+
+#Logistic Regression model
+logmodel <- train(rva ~ ., data = train, method = "glm", trControl = trainControl, family = binomial)
+log_predictions <- predict(logmodel, test)
+
+
+
+
+# Ensure predictions and test$rva are factors with the same levels
+pls_predictions <- factor(pls_predictions)
+rf_predictions <- factor(rf_predictions)
+test$rva <- factor(test$rva)
+gbm_predictions <- factor(gbm_predictions)
+log_predictions <- factor(log_predictions)
+
+
+#random forest confusion matrix
+test_rf = confusionMatrix(rf_predictions, test$rva, positive="1")
+test_rf
+
+#PLS confusion matrix
+test_rf = confusionMatrix(pls_predictions, test$rva, positive="1")
+test_rf 
+
+#GBM confusion matrix
+test_gbm <- confusionMatrix(data = gbm_predictions, reference = test$rva, positive="1")
+test_gbm 
+
+#LOG confusion matrix
+test_log <- confusionMatrix(data = log_predictions, reference = test$rva, positive="1")
+test_log 
+
+
+######Checking for overfitting###########
+#Random Forest model
+rf_predictions_train <- predict(rfmodel, train)
+
+#partial least squares regression (PLS) model
+pls_predictions_train <- predict(plsmodel, train)
+
+#Gradient Boosting Machine (GBM) model
+gbm_predictions_train <- predict(gbmmodel, train)
+
+#Gradient Boosting Machine (GBM) model
+log_predictions_train <- predict(logmodel, train)
+
+#random forest confusion matrix
+train_rf = confusionMatrix(rf_predictions_train, train$rva, positive="1")
+train_rf
+
+#PLS confusion matrix
+train_pls = confusionMatrix(pls_predictions_train, train$rva, positive="1")
+train_pls 
+
+#GBM confusion matrix
+train_gbm <- confusionMatrix(data = gbm_predictions_train, reference = train$rva, positive="1")
+train_gbm 
+
+#LOG confusion matrix
+train_log <- confusionMatrix(data = log_predictions_train, reference = train$rva, positive="1")
+train_log 
+
+#columns added for predicted values based on models
+test$rf_predictions <- rf_predictions #for random forest
+test$pls_predictions <- pls_predictions #for pls
+test$gbm_predictions <- gbm_predictions #for gdm
+test$log_predictions <- log_predictions #for log
+
+# Define a function to calculate the Brier score
+calculate_brier_score <- function(actual, predicted) {
+  # Ensure both actual and predicted are factors with the same levels
+  actual <- factor(actual)
+  predicted <- factor(predicted, levels = levels(actual))
+  
+  # Convert actual to numeric (0 or 1)
+  actual_numeric <- as.numeric(actual) - 1
+  
+  # Convert predicted to numeric (0 or 1)
+  predicted_numeric <- as.numeric(predicted) - 1
+  
+  # Calculate the Brier score
+  brier_score <- mean((actual_numeric - predicted_numeric)^2)
+  
+  return(brier_score)
+}
+
+# Calculate Brier scores
+brier_rf <- calculate_brier_score(test$rva, test$rf_predictions) #random forest
+brier_rf
+brier_pls <- calculate_brier_score(test$rva, test$pls_predictions)#partial least squares regression
+brier_pls
+brier_gbm <- calculate_brier_score(test$rva, test$gbm_predictions)
+brier_gbm
+brier_log <- calculate_brier_score(test$rva, test$log_predictions)
+brier_log
+  
+# Provide column of probability scores 
+# Subset the test data to include relevant predictors
+test_subset <- test[, c("age", "region")]
+
+# Generate probability scores for class "1" (assuming "rva" is a binary outcome)
+prob_rf <- predict(rfmodel, test_subset, type = "prob")[, "1"] #random forest
+prob_pls <- predict(plsmodel, test_subset, type = "prob")[, "1"] #pls
+prob_gbm <- predict(gbmmodel, test_subset, type = "prob")[, "1"] #gbm
+prob_log <- predict(logmodel, test_subset, type = "prob")[, "1"] #log
+
+
+# Add probability scores as a new column to the test data frame
+test$probability_scores_rf <- prob_rf #random forest
+test$probability_scores_pls <- prob_pls #random forest
+test$probability_scores_gbm <- prob_gbm #gbm
+test$probability_scores_log <- prob_log #log
+
+# Calculate log loss score
+log_loss <- function(actual, predicted) {
+  actual <- as.numeric(as.character(actual))
+  predicted <- as.numeric(as.character(predicted))
+  
+  result <- -1/length(actual) * sum((actual * log(predicted) + (1 - actual) * log(1 - predicted)))
+  return(result)
+}
+
+log_loss(test$rva, test$probability_scores_rf) #random forest, NaN as log(0) 
+log_loss(test$rva, test$probability_scores_pls) #pls
+log_loss(test$rva, test$probability_scores_gbm) #gdm
+log_loss(test$rva, test$probability_scores_log) #log
+
+# Calculate Discrimination Measures (area under the ROC curve) for Random Forest
+rates_rf <- prediction(prob_rf, test$rva)
+perf_rf <- performance(rates_rf, "tpr", "fpr")
+auc_rf <- performance(rates_rf, "auc")@y.values[[1]]  # Get AUC value
+auc_rf
+plot(perf_rf, col = "red", lty = 1, main = paste("Receiver Operating Characteristic (ROC) Curves"))
+
+# Calculate Discrimination Measures (area under the ROC curve) for PLS
+rates_pls <- prediction(prob_pls, test$rva)
+perf_pls <- performance(rates_pls, "tpr", "fpr")
+auc_pls <- performance(rates_pls, "auc")@y.values[[1]]  # Get AUC value
+auc_pls
+plot(perf_pls, col = "blue", lty = 2, add = TRUE)
+legend("bottomright", legend = c("Random Forest", "PLS"), col = c("red", "blue"), lty = c(1, 2))
+
+# Calculate Discrimination Measures (area under the ROC curve) for LOG
+rates_log <- prediction(prob_log, test$rva)
+perf_log <- performance(rates_log, "tpr", "fpr")
+auc_log <- performance(rates_log, "auc")@y.values[[1]]  # Get AUC value
+auc_log
+plot(perf_log, col = "purple", lty = 2, add = TRUE)
+legend("bottomright", legend = c("Random Forest", "PLS", "LOG"), col = c("red", "blue", "purple"), lty = c(1, 2))
+
+
+# Calculate Discrimination Measures (area under the ROC curve) for GBM
+rates_gbm <- prediction(prob_gbm, test$rva)
+perf_gbm <- performance(rates_gbm, "tpr", "fpr")
+auc_gbm <- performance(rates_gbm, "auc")@y.values[[1]]  # Get AUC value
+auc_gbm
+plot(perf_gbm, col = "green", lty = 3, add = TRUE)
+legend("bottomright", legend = c("Random Forest", "PLS and LOG", "GBM"), col = c("red",  "purple", "green"), lty = c(1, 2, 3))
+
+
+# Load necessary library
+library(calibrate)
+
+# Define a function to compute the smoothed density
+compute_smoothed_density <- function(data) {
+  density(data, kernel = "gaussian", bw = 0.07)
+}
+
+# Calculate observed and predicted probabilities for Random Forest
+calibration_rf <- calculate_observed_probabilities(test$rva, prob_rf)
+
+# Compute smoothed density for Random Forest
+smoothed_density_rf <- compute_smoothed_density(calibration_rf$predicted_probs)
+
+# Plot the calibration curve for Random Forest
+plot(calibration_rf$predicted_probs, calibration_rf$observed_probs, type = "n",
+     xlim = c(0, 1), ylim = c(0, 1), xlab = "Predicted Probabilities", ylab = "Observed Probabilities",
+     main = "Smoothed Calibration Plot")
+
+# Add smoothed calibration curve for Random Forest
+lines(smoothed_density_rf, col = "blue", lwd = 2)
+
+# Add a diagonal line (perfect calibration)
+abline(0, 1, col = "gray")
+
+# Repeat the same process for PLS and GBM and LOG models
+calibration_pls <- calculate_observed_probabilities(test$rva, prob_pls)
+smoothed_density_pls <- compute_smoothed_density(calibration_pls$predicted_probs)
+lines(smoothed_density_pls, col = "green", lwd = 2)
+
+calibration_gbm <- calculate_observed_probabilities(test$rva, prob_gbm)
+smoothed_density_gbm <- compute_smoothed_density(calibration_gbm$predicted_probs)
+lines(smoothed_density_gbm, col = "purple", lwd = 2)
+
+calibration_log <- calculate_observed_probabilities(test$rva, prob_log)
+smoothed_density_log <- compute_smoothed_density(calibration_log$predicted_probs)
+lines(smoothed_density_log, col = "orange", lwd = 2)
+
+legend("bottomright", legend = c("Random Forest", "PLS", "GBM", "LOG"), col = c("blue", "green", "purple", "orange"), cex = 0.6, lty = c(1, 1, 1))
