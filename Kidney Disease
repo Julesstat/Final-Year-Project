@@ -1,0 +1,230 @@
+#######Kidney Disease#######
+
+library(RWeka)
+library(caret)   # For model training and evaluation
+library(pROC) #For AUC values and ROC 
+library(mice) #For NA values in data
+library(devtools) # Load the devtools library
+library(ROSE)  #oversampling method using bootstrap approch
+library(DMwR)
+#install.packages("C50")
+library(nnet)
+library(calibrate)
+#install.packages("CHAID", repos="http://R-Forge.R-project.org")
+library(CHAID)
+
+setwd("C:/Users/jmmes/OneDrive/Dokumente/FinalYearProject")
+kidney <- read.arff(file = "chronic_kidney_disease.arff")
+dim(kidney)
+
+kidney$ane <- as.numeric(as.factor(kidney$ane))
+kidney$pe <- as.numeric(as.factor(kidney$pe))
+kidney$cad <- as.numeric(as.factor(kidney$cad))
+kidney$dm <- as.numeric(as.factor(kidney$dm))
+kidney$htn <- as.numeric(as.factor(kidney$htn))
+# make disease 1 and not 0
+kidney$class <- ifelse(kidney$class == "ckd", 1, 0)
+
+# Check the first few rows to verify the changes
+head(kidney)
+kidney$appet <- as.numeric(as.factor(kidney$appet))
+kidney$pe <- as.numeric(as.factor(kidney$pe))
+kidney$ba <- as.numeric(as.factor(kidney$ba))
+kidney$pcc <- as.numeric(as.factor(kidney$pcc))
+kidney$pc <- as.numeric(as.factor(kidney$pc))
+kidney$rbc <- as.numeric(as.factor(kidney$rbc))
+kidney$su <- as.numeric(as.factor(kidney$su))
+kidney$al <- as.numeric(as.factor(kidney$al))
+
+min(kidney$age)
+max(kidney$age)
+
+#Creating values for NA values in Education and Marital Status
+md.pattern(kidney) #the layout of missing values
+
+#data imputation with ‘mice’ , using formula fills in missing data
+imputed_data <- mice(kidney, method = "cart")
+kidney_imputed <- complete(imputed_data)
+dim(kidney_imputed)
+ 
+
+set.seed(7)
+validationIndex <- caret::createDataPartition(kidney_imputed$class, p=0.70, list=FALSE)
+test <- kidney_imputed[-validationIndex,] #test, validation
+train <- kidney_imputed[validationIndex,] #train, dataset
+dim(test)
+dim(train)
+
+trainControl = trainControl(method="cv", number=5, verboseIter = TRUE)
+
+rf_grid = expand.grid(mtry = 2,4,6) 
+pls_grid = expand.grid(method = "oscorespls")
+
+#for test and train
+train$class <- as.factor(train$class)
+test$class <- as.factor(test$class)
+
+
+min(kidney_imputed$age)
+max(kidney_imputed$age)
+
+
+######################model creation#####################
+
+# Define the training control
+train_control <- trainControl(method = "cv",  # 10-fold cross-validation
+                              number = 10,    # Number of folds
+                              verboseIter = TRUE)  # Show iteration progress
+nn_grid = expand.grid(size=10, decay = 0.1)
+
+
+# Train models
+gbm_model <- train(class ~ ., data = train, method = "gbm", trControl = trainControl,  verbose = TRUE) #gbm model
+
+
+set.seed(123)
+nn_model = train(class ~ ., data = train, method = 'nnet', preProcess = c('center', 'scale'), trControl = trainControl, tuneGrid = nn_grid)#ANN 
+rt_model <- train(class ~ ., data = train, method = "rpart", trControl = trainControl) #Random tree 
+#chaid_model <- train(class ~ ., data = train, method = "chaid", trControl = trainControl) #Random tree 
+
+# Predictions
+gbm_predictions <- predict(gbm_model, test)
+nn_predictions <- predict(nn_model, test)
+rt_predictions <- predict(rt_model, test)
+
+# Confusion matrices
+gbm_test <- confusionMatrix(gbm_predictions, test$class, positive="1")
+gbm_test  
+nn_test <- confusionMatrix(nn_predictions, test$class, positive="1")
+nn_test 
+test$class <- as.factor(test$class)
+rt_test <- confusionMatrix(rt_predictions, test$class, positive="1")
+rt_test 
+
+
+ctrl <- chaid_control(minsplit = 200, minprob = 0.1)
+chaid_model <- train(class~ ., data = train, trcontrol = ctrl)
+chaid_predictions <- predict(chaid_model, test)
+chaid_test <- confusionMatrix(chaid_predictions, test$class, positive="1")
+chaid_test
+
+
+################################################################Analysis####################################################
+#columns added for predicted values based on models
+test$nn_predictions <- nn_predictions #for ann
+test$gbm_predictions <- gbm_predictions #for gdm
+test$rt_predictions <- rt_predictions #for rt
+test$chaid_predictions <- chaid_predictions #for chaid
+
+
+#Define a function to calculate the Brier score
+calculate_brier_score <- function(actual, predicted) {
+  # Ensure both actual and predicted are factors with the same levels
+  actual <- factor(actual)
+  predicted <- factor(predicted, levels = levels(actual))
+  
+  # Convert actual to numeric (0 or 1)
+  actual_numeric <- as.numeric(actual) - 1
+  
+  # Convert predicted to numeric (0 or 1)
+  predicted_numeric <- as.numeric(predicted) - 1
+  
+  # Calculate the Brier score
+  brier_score <- mean((actual_numeric - predicted_numeric)^2)
+  
+  return(brier_score)
+}
+
+# Calculate Brier scores
+brier_gbm <- calculate_brier_score(test$class, test$gbm_predictions)
+brier_gbm
+brier_nn <- calculate_brier_score(test$class, test$nn_predictions)
+brier_nn
+brier_rt <- calculate_brier_score(test$class, test$rt_predictions)
+brier_rt
+brier_chaid <- calculate_brier_score(test$class, test$chaid_predictions)
+brier_chaid
+
+
+#calc the rest of the stuff, auc, log loss, calibration plot, add f measure
+
+
+#log loss score
+# Calculate log loss score
+log_loss <- function(actual, predicted) {
+  actual <- as.numeric(as.character(actual))
+  predicted <- as.numeric(as.character(predicted))
+  
+  result <- -1/length(actual) * sum((actual * log(predicted) + (1 - actual) * log(1 - predicted)))
+  return(result)
+}
+
+
+# Subset the test data to include relevant predictors
+test_subset <- test[, -which(names(test) == "class")]
+
+
+
+# Generate probability scores for class "1" (assuming "class" is a binary outcome)
+prob_gbm <- predict(gbm_model, test_subset, type = "prob")[, "1"] #gbm
+prob_nn <- predict(nn_model, test_subset, type = "prob")[, "1"] #nn
+prob_rt <- predict(rt_model, test_subset, type = "prob")[, "1"] #rt
+prob_chaid <- predict(chaid_model, test_subset, type = "prob")[, "1"] #chaid 
+
+# Add probability scores as a new column to the test data frame
+test$probability_scores_gbm <- prob_gbm #gbm
+test$probability_scores_nn <- prob_nn #nn
+test$probability_scores_rt <- prob_rt #rt
+test$probability_scores_chaid <- prob_chaid #chaid
+
+
+log_loss(test$class, test$probability_scores_gbm) #gdm
+log_loss(test$class, test$probability_scores_nn) #nn
+
+
+# Add a small epsilon to predicted probabilities to avoid 0 or 1 values
+epsilon <- 1e-15
+test$probability_scores_rt_adjusted <- pmax(pmin(test$probability_scores_rt, 1 - epsilon), epsilon)
+test$probability_scores_chaid_adjusted <- pmax(pmin(test$probability_scores_chaid, 1 - epsilon), epsilon)
+
+
+# Calculate log loss with adjusted probabilities
+log_loss_adjusted <- log_loss(test$class, test$probability_scores_rt_adjusted)
+print(log_loss_adjusted) #rt log loss score
+
+log_loss_adjusted <- log_loss(test$class, test$probability_scores_chaid_adjusted)
+print(log_loss_adjusted) #chaid log loss score
+
+
+#auc vaules and plot
+
+# Calculate Discrimination Measures (area under the ROC curve) for Random Tree
+rates_rt <- prediction(prob_rt, test$class)
+perf_rt <- performance(rates_rt, "tpr", "fpr")
+auc_rt <- performance(rates_rt, "auc")@y.values[[1]]  # Get AUC value
+auc_rt
+plot(perf_rt, col = "red", lty = 1, main = paste("Receiver Operating Characteristic (ROC) Curves"))
+
+# Calculate Discrimination Measures (area under the ROC curve) for NN
+rates_nn <- prediction(prob_nn, test$class)
+perf_nn <- performance(rates_nn, "tpr", "fpr")
+auc_nn <- performance(rates_nn, "auc")@y.values[[1]]  # Get AUC value
+auc_nn
+plot(perf_nn, col = "blue", lty = 2, add = TRUE)
+
+# Calculate Discrimination Measures (area under the ROC curve) for chaid
+rates_chaid <- prediction(prob_chaid, test$class)
+perf_chaid <- performance(rates_chaid, "tpr", "fpr")
+auc_chaid <- performance(rates_chaid, "auc")@y.values[[1]]  # Get AUC value
+auc_chaid
+plot(perf_chaid, col = "black", lty = 2, add = TRUE)
+
+
+
+# Calculate Discrimination Measures (area under the ROC curve) for gbm
+rates_gbm <- prediction(prob_gbm, test$class)
+perf_gbm <- performance(rates_gbm, "tpr", "fpr")
+auc_gbm <- performance(rates_gbm, "auc")@y.values[[1]]  # Get AUC value
+auc_gbm
+plot(perf_gbm, col = "purple", lty = 3, add = TRUE)
+legend("bottomright", legend = c(" Random Tree", "Neural Network", "GBM", "CHAID"), col = c("red", "blue", "purple", "black"), lty = c(1))
