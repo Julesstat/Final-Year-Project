@@ -228,3 +228,44 @@ auc_gbm <- performance(rates_gbm, "auc")@y.values[[1]]  # Get AUC value
 auc_gbm
 plot(perf_gbm, col = "purple", lty = 3, add = TRUE)
 legend("bottomright", legend = c(" Random Tree", "Neural Network", "GBM", "CHAID"), col = c("red", "blue", "purple", "black"), lty = c(1))
+
+# F-measure
+#chaid
+chaid_test
+chaid_recall <- (76/(76+0))*100
+chaid_recall
+chaid_precision <- (76/(76+1))*100
+chaid_precision
+
+chaid_F_measure <- 2*((chaid_precision*chaid_recall)/(chaid_precision+chaid_recall))
+chaid_F_measure
+
+#nn
+nn_test
+nn_recall <- (74/(74+2))*100
+nn_recall
+nn_precision <- (74/(74+1))*100
+nn_precision
+
+nn_F_measure <- 2*((nn_precision*nn_recall)/(nn_precision+nn_recall))
+nn_F_measure
+
+#gbm
+gbm_test
+gbm_recall <- (75/(75+1))*100
+gbm_recall
+gbm_precision <- (75/(75+1))*100
+gbm_precision
+
+gbm_F_measure <- 2*((gbm_precision*gbm_recall)/(gbm_precision+gbm_recall))
+gbm_F_measure
+
+#random tree
+rt_test
+rt_recall <- (74/(74+3))*100
+rt_recall
+rt_precision <- (74/(74+2))*100
+rt_precision
+
+rt_F_measure <- 2*((rt_precision*rt_recall)/(rt_precision+rt_recall))
+rt_F_measure
