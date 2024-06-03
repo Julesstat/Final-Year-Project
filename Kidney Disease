@@ -1,4 +1,4 @@
-#######Kidney Disease#######
+#######Chronic Kidney Disease#######
 
 library(RWeka)
 library(caret)   # For model training and evaluation
@@ -7,10 +7,8 @@ library(mice) #For NA values in data
 library(devtools) # Load the devtools library
 library(ROSE)  #oversampling method using bootstrap approch
 library(DMwR)
-#install.packages("C50")
 library(nnet)
 library(calibrate)
-#install.packages("CHAID", repos="http://R-Forge.R-project.org")
 library(CHAID)
 
 setwd("C:/Users/jmmes/OneDrive/Dokumente/FinalYearProject")
@@ -43,12 +41,13 @@ max(kidney$age)
 md.pattern(kidney) #the layout of missing values
 
 #data imputation with ‘mice’ , using formula fills in missing data
+set.seed(17)
 imputed_data <- mice(kidney, method = "cart")
 kidney_imputed <- complete(imputed_data)
 dim(kidney_imputed)
  
 
-set.seed(7)
+set.seed(17)
 validationIndex <- caret::createDataPartition(kidney_imputed$class, p=0.70, list=FALSE)
 test <- kidney_imputed[-validationIndex,] #test, validation
 train <- kidney_imputed[validationIndex,] #train, dataset
@@ -79,13 +78,12 @@ nn_grid = expand.grid(size=10, decay = 0.1)
 
 
 # Train models
+set.seed(17)
 gbm_model <- train(class ~ ., data = train, method = "gbm", trControl = trainControl,  verbose = TRUE) #gbm model
-
-
-set.seed(123)
+set.seed(17)
 nn_model = train(class ~ ., data = train, method = 'nnet', preProcess = c('center', 'scale'), trControl = trainControl, tuneGrid = nn_grid)#ANN 
+set.seed(17)
 rt_model <- train(class ~ ., data = train, method = "rpart", trControl = trainControl) #Random tree 
-#chaid_model <- train(class ~ ., data = train, method = "chaid", trControl = trainControl) #Random tree 
 
 # Predictions
 gbm_predictions <- predict(gbm_model, test)
@@ -102,7 +100,8 @@ rt_test <- confusionMatrix(rt_predictions, test$class, positive="1")
 rt_test 
 
 
-ctrl <- chaid_control(minsplit = 200, minprob = 0.1)
+ctrl <- chaid_control(minsplit = 20, minprob = 0.1)
+set.seed(18)
 chaid_model <- train(class~ ., data = train, trcontrol = ctrl)
 chaid_predictions <- predict(chaid_model, test)
 chaid_test <- confusionMatrix(chaid_predictions, test$class, positive="1")
@@ -203,31 +202,29 @@ rates_rt <- prediction(prob_rt, test$class)
 perf_rt <- performance(rates_rt, "tpr", "fpr")
 auc_rt <- performance(rates_rt, "auc")@y.values[[1]]  # Get AUC value
 auc_rt
-plot(perf_rt, col = "red", lty = 1, main = paste("Receiver Operating Characteristic (ROC) Curves"))
+plot(perf_rt, col = "black", lty = 1, main = paste("Receiver Operating Characteristic (ROC) Curves"))
 
 # Calculate Discrimination Measures (area under the ROC curve) for NN
 rates_nn <- prediction(prob_nn, test$class)
 perf_nn <- performance(rates_nn, "tpr", "fpr")
 auc_nn <- performance(rates_nn, "auc")@y.values[[1]]  # Get AUC value
 auc_nn
-plot(perf_nn, col = "blue", lty = 2, add = TRUE)
+plot(perf_nn, col = "blue", lty = 1, add = TRUE)
 
 # Calculate Discrimination Measures (area under the ROC curve) for chaid
 rates_chaid <- prediction(prob_chaid, test$class)
 perf_chaid <- performance(rates_chaid, "tpr", "fpr")
 auc_chaid <- performance(rates_chaid, "auc")@y.values[[1]]  # Get AUC value
 auc_chaid
-plot(perf_chaid, col = "black", lty = 2, add = TRUE)
-
-
+plot(perf_chaid, col = "red", lty = 1, add = TRUE)
 
 # Calculate Discrimination Measures (area under the ROC curve) for gbm
 rates_gbm <- prediction(prob_gbm, test$class)
 perf_gbm <- performance(rates_gbm, "tpr", "fpr")
 auc_gbm <- performance(rates_gbm, "auc")@y.values[[1]]  # Get AUC value
 auc_gbm
-plot(perf_gbm, col = "purple", lty = 3, add = TRUE)
-legend("bottomright", legend = c(" Random Tree", "Neural Network", "GBM", "CHAID"), col = c("red", "blue", "purple", "black"), lty = c(1))
+plot(perf_gbm, col = "purple", lty = 1, add = TRUE)
+legend("bottomright", legend = c(" Random Tree", "Neural Network, GBM, and CHAID"), col = c("black", "purple"), lty = c(1))
 
 # F-measure
 #chaid
@@ -269,3 +266,8 @@ rt_precision
 
 rt_F_measure <- 2*((rt_precision*rt_recall)/(rt_precision+rt_recall))
 rt_F_measure
+
+#ROC-curve using pROC library
+library(pROC)
+roc_score=roc(test$class, prob_chaid) #AUC score
+plot(roc_score ,main ="ROC curve -- Logistic Regression ")
